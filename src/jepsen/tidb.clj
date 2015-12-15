@@ -28,15 +28,15 @@
   (info node "installing hbase + themis")
   (c/su
     (c/cd "/root"
-          (let [uri "https://archive.apache.org/dist/hbase/hbase-0.98.6/hbase-0.98.6-hadoop2-bin.tar.gz"]
+          (let [uri "https://archive.apache.org/dist/hbase/0.98.15/hbase-0.98.15-hadoop2-bin.tar.gz"]
             (when-not (cu/file? "hbase")
               (info node "installing java")
               (debian/install ["openjdk-7-jre-headless"])
               
               (info node "downloading hbase")
               (c/exec :wget :-c uri)
-              (c/exec :tar :xzf "hbase-0.98.6-hadoop2-bin.tar.gz")
-              (c/exec :mv :-f "hbase-0.98.6-hadoop2" "hbase"))))
+              (c/exec :tar :xzf "hbase-0.98.15-hadoop2-bin.tar.gz")
+              (c/exec :mv :-f "hbase-0.98.15-hadoop2" "hbase"))))
     (c/cd "/root/jepsen-tidb-res"
           (info node "installing tso-server")
           (c/exec :tar :xzf "tso-server.tar.gz")
@@ -99,7 +99,7 @@
             :--no-close
             :--
             (str "-addr=:1234")
-            :> tso-log
+            :>> tso-log
             (c/lit "2>&1"))
     (info node "tso server started")))
 
@@ -125,12 +125,12 @@
             :--exec     tidb-binary
             :--no-close
             :--
-            (str "-L=error")
+            (str "-L=debug")
             (str "-P=3306")
             (str "-lease=1")
             (str "-store=hbase")
-            (str "-path=" store-path)
-            :> tidb-log
+            (str "-path=" (c/lit store-path))
+            :>> tidb-log
             (c/lit "2>&1")
             )
     (info node "tidb server started")))
@@ -155,8 +155,13 @@
   [node]
   (c/su 
     (info node "stopping hbase")
-    (c/exec "/root/hbase/bin/stop-hbase.sh")
-    (c/exec :rm :-rf "./logs/*")))
+    ;call stop-hbase.sh is very slow, so here we kill java forcely.
+    (meh (cu/grepkill "java"))
+    ;(meh (c/exec "/root/hbase/bin/stop-hbase.sh"))
+    (meh (c/exec :rm :-rf "/root/hbase/logs/*"))
+    (meh (c/exec :rm :-rf "/var/lib/hbase/*"))
+    (meh (c/exec :rm :-rf "/var/lib/hbase_zookeeper/*")))
+  (info node "hbase stopped"))
 
 (defn db
   "Sets up and tears down TiDB"
@@ -168,7 +173,8 @@
             (when (= node :n1)
               (install-hbase! node)
               (start-hbase! node)
-              (start-tso-server! node))
+              (start-tso-server! node)
+              (Thread/sleep 1000))
             
             (jepsen/synchronize test)
             (start-tidb-server! node)
@@ -186,6 +192,7 @@
   [version]
   (merge tests/noop-test
          {:os debian/os
-          :db (db version)}))
+          :db (db version)
+          :concurrency 20}))
 
 
