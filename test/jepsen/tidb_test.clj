@@ -7,5 +7,9 @@
   "What TiDB version should we test?"
   "0.0.1")
 
-(deftest basic-test
-  (is (:valid? (:results (run! (tidb/basic-test version))))))
+; (deftest basic-test
+;   (is (:valid? (:results (run! (tidb/basic-test version))))))
+
+
+(deftest dirty-reads-test
+  (is (:valid? (:results (run! (tidb/dirty-test version 4))))))

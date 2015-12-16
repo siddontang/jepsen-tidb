@@ -65,7 +65,7 @@
           (c/exec :chmod :+x "tidb-server")
           (c/exec :mv :-f "tidb-server" "/root"))))
 
-(def store-path (str (name :n1) ":2881|" (name :n1) ":1234/test"))
+(def store-path (str (name :n1) ":2181|" (name :n1) ":1234/test"))
 
 (def tidb-pidfile "/var/run/tidb-server.pid")
 (def tidb-binary "/root/tidb-server")
@@ -99,7 +99,7 @@
             :--no-close
             :--
             (str "-addr=:1234")
-            :>> tso-log
+            :> tso-log
             (c/lit "2>&1"))
     (info node "tso server started")))
 
@@ -125,12 +125,12 @@
             :--exec     tidb-binary
             :--no-close
             :--
-            (str "-L=debug")
+            (str "-L=error")
             (str "-P=3306")
             (str "-lease=1")
             (str "-store=hbase")
-            (str "-path=" (c/lit store-path))
-            :>> tidb-log
+            (c/lit (str "-path=\"" store-path "\""))
+            :> tidb-log
             (c/lit "2>&1")
             )
     (info node "tidb server started")))
@@ -148,19 +148,21 @@
   [node]
   (c/su
     (info node "starting hbase")
-    (c/exec "/root/hbase/bin/start-hbase.sh")))
+    (meh (c/exec :mkdir :-p "/tmp/hbase"))))
+    (meh (c/exec "/root/hbase/bin/start-hbase.sh"))))
 
 (defn stop-hbase!
   "Stops hbase"
   [node]
   (c/su 
     (info node "stopping hbase")
-    ;call stop-hbase.sh is very slow, so here we kill java forcely.
+    ; call stop-hbase.sh is very slow, so here we kill java forcely.
     (meh (cu/grepkill "java"))
-    ;(meh (c/exec "/root/hbase/bin/stop-hbase.sh"))
+    ; (meh (c/exec "/root/hbase/bin/stop-hbase.sh"))
     (meh (c/exec :rm :-rf "/root/hbase/logs/*"))
     (meh (c/exec :rm :-rf "/var/lib/hbase/*"))
-    (meh (c/exec :rm :-rf "/var/lib/hbase_zookeeper/*")))
+    (meh (c/exec :rm :-rf "/tmp/hbase/*"))
+    )
   (info node "hbase stopped"))
 
 (defn db
@@ -171,27 +173,201 @@
             (install-tidb! node)
             
             (when (= node :n1)
-              (install-hbase! node)
+              ;(install-hbase! node)
               (start-hbase! node)
               (start-tso-server! node)
-              (Thread/sleep 1000))
+              (Thread/sleep 5000))
             
             (jepsen/synchronize test)
             (start-tidb-server! node)
+            
+            (Thread/sleep 1000)
+            (jepsen/synchronize test)
             (info node "set up"))
     
     (teardown! [_ test node]
                (stop-tidb-server! node)
                (when (= node :n1)
                  (stop-tso-server! node)
-                 (stop-hbase! node))
+                 ; (stop-hbase! node)
+                 )
                (info node "tore down"))))
 
+(defn conn-spec
+  "jdbc connection spec for a node."
+  [node]
+  {:classname   "org.mariadb.jdbc.Driver"
+   :subprotocol "mariadb"
+   :subname     (str "//" (name node) ":3306/test")
+   :user        "root"
+   :password    ""})
+
+; Following transaction helper functions and test clients are copied from jepsen gelera source 
+; with a little change.
+(def rollback-msg
+  "mariadb drivers have a few exception classes that use this message"
+  "Deadlock found when trying to get lock; try restarting transaction")
+
+(defmacro capture-txn-abort
+  "Converts aborted transactions to an ::abort keyword"
+  [& body]
+  `(try ~@body
+     (catch java.sql.SQLTransactionRollbackException e#
+       (if (= (.getMessage e#) rollback-msg)
+         ::abort
+         (throw e#)))
+     (catch java.sql.BatchUpdateException e#
+       (if (= (.getMessage e#) rollback-msg)
+         ::abort
+         (throw e#)))))
+
+(defmacro with-txn-retries
+  "Retries body on rollbacks."
+  [& body]
+  `(loop []
+     (let [res# (capture-txn-abort ~@body)]
+       (if (= ::abort res#)
+         (recur)
+         res#))))
+
+(defmacro with-txn-aborts
+  "Aborts body on rollbacks."
+  [op & body]
+  `(let [res# (capture-txn-abort ~@body)]
+     (if (= ::abort res#)
+       (assoc ~op :type :fail)
+       res#)))
+
+(defmacro with-error-handling
+  "Common error handling for Galera errors"
+  [op & body]
+  `(try ~@body
+     (catch java.sql.SQLNonTransientConnectionException e#
+       (condp = (.getMessage e#)
+         "WSREP has not yet prepared node for application use"
+         (assoc ~op :type :fail, :value (.getMessage e#))
+         
+         (throw e#)))))
+
+(defmacro with-txn
+  "Executes body in a transaction, with a timeout, automatically retrying
+  conflicts and handling common errors."
+  [op [c node] & body]
+  `(timeout 5000 (assoc ~op :type :info, :value :timed-out)
+            (with-error-handling 
+              ~op
+              (with-txn-retries
+                (j/with-db-transaction [~c (conn-spec ~node)
+                                        :isolation :serializable]
+                                       ~@body)))))
+
+
+(defrecord DirtyClient [node n]
+  client/Client
+  (setup! [this test node]
+          (j/with-db-connection 
+            [c (conn-spec node)]
+            ; Create table
+            (j/execute! c ["create table if not exists dirty
+                           (id      int not null primary key,
+                           x       bigint not null)"])
+            ; Create rows
+            (dotimes [i n]
+              (try
+                (with-txn-retries
+                  (Thread/sleep (rand-int 10))
+                  (j/insert! c :dirty {:id i, :x -1}))
+                (catch java.sql.SQLException e nil))))
+          
+          (assoc this :node node))
+  
+  (invoke! [this test op]
+           (timeout 5000 (assoc ~op :type :info, :value :timed-out)
+                    (with-error-handling 
+                      op
+                      (with-txn-aborts 
+                        op
+                        (j/with-db-transaction
+                          [c (conn-spec node)
+                           :isolation :serializable]
+                          (try
+                            (case (:f op)
+                              :read (->> (j/query c ["select * from dirty"])
+                                         (mapv :x)
+                                         (assoc op :type :ok, :value))
+                              
+                              :write (let [x (:value op)
+                                           order (shuffle (range n))]
+                                       (doseq [i order]
+                                         (j/query c ["select * from dirty where id = ?" i]))
+                                       (doseq [i order]
+                                         (j/update! c :dirty {:x x} ["id = ?" i]))
+                                       (assoc op :type :ok)))))))))
+  
+  (teardown! [_ test]))
+
+(defn dirty-client
+  [n]
+  (DirtyClient. nil n))
+
+(defn dirty-checker
+  "We're looking for a failed transaction whose value became visible to some
+  read."
+  []
+  (reify checker/Checker
+    (check [this test model history]
+           (let [failed-writes (->> history
+                                    (r/filter op/fail?)
+                                    (r/filter #(= :write (:f %)))
+                                    (r/map :value)
+                                    (into (hash-set)))
+                 reads (->> history
+                            (r/filter op/ok?)
+                            (r/filter #(= :read (:f %)))
+                            (r/map :value))
+                 inconsistent-reads (->> reads
+                                         (r/filter (partial apply not=))
+                                         (into []))
+                 filthy-reads (->> reads
+                                   (r/filter (partial some failed-writes))
+                                   (into []))]
+             {:valid? (empty? filthy-reads)
+              :inconsistent-reads inconsistent-reads
+              :dirty-reads filthy-reads}))))
+
+(def dirty-reads {:type :invoke, :f :read, :value nil})
+
+(def dirty-writes (->> (range)
+                       (map (partial array-map
+                                     :type :invoke,
+                                     :f :write,
+                                     :value))
+                       gen/seq))
+
+(defn dirty-test
+  [version n]
+  (merge tests/noop-test
+         {:name "tidb dirty reads"
+          :os debian/os
+          :db (db version)
+          :concurrency 20
+          :version version
+          :client (dirty-client n)
+          :generator (->> (gen/mix [dirty-reads dirty-writes])
+                          gen/clients
+                          (gen/time-limit 1000))
+          :nemesis nemesis/noop
+          :checker (checker/compose
+                     {:perf (checker/perf)
+                      :dirty-reads (dirty-checker)})}))
+
+
 (defn basic-test
-  "A simple test of MeowDB's safety."
+  "A simple test for Tidb."
   [version]
   (merge tests/noop-test
-         {:os debian/os
+         {:name "tidb"
+          :os debian/os
           :db (db version)
           :concurrency 20}))
 
