@@ -168,9 +168,9 @@
     (cu/grepkill "java")
     (Thread/sleep 2000)
     ; (meh (c/exec "/root/hbase/bin/stop-hbase.sh"))
-    ;(meh (c/exec :rm :-rf "/var/lib/hbase/"))
-    ;(meh (c/exec :rm :-rf "/root/hbase/logs/"))
-    (meh (c/exec :rm :-rf "/tmp/hbase/"))
+    (meh (c/exec :rm :-rf (c/lit "/var/lib/hbase/*")))
+    (meh (c/exec :rm :-rf (c/lit "/root/hbase/logs/*")))
+    (meh (c/exec :rm :-rf (c/lit "/tmp/hbase/*")))
     )
   (info node "hbase stopped"))
 
@@ -208,6 +208,7 @@
             
             (jepsen/synchronize test)
             (start-tidb-server! node)
+            (Thread/sleep 3000)
             
             (jepsen/synchronize test)
             (info node "set up"))
