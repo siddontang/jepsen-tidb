@@ -73,10 +73,10 @@ This container runs the Jepsen tests in sub-containers.
 You are currently in the base dir of the git repo for Jepsen.
 If you modify the core jepsen library make sure you "lein install" it so other tests can access.
 
-To run a test:
-   cd elasticsearch && lein test 
+To run jepsen tidb test:
+    lein test 
 EOF
 
-cd /jepsen
+cd /jepsen_tidb
 
 fi
