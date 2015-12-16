@@ -42,6 +42,12 @@
           (c/exec :tar :xzf "tso-server.tar.gz")
           (c/exec :chmod :+x "tso-server")
           (c/exec :mv :-f "tso-server" "/root")
+          
+          (info node "installing interpreter")
+          (c/exec :tar :xzf "interpreter.tar.gz")
+          (c/exec :chmod :+x "interpreter")
+          (c/exec :mv :-f "interpreter" "/root")
+          
           (info node "installing themis")
           (c/exec :cp :-f "themis-coprocessor-1.0-SNAPSHOT-jar-with-dependencies.jar" "/root/hbase/lib")
           (c/exec :cp :-f "hbase-site.xml" "/root/hbase/conf")
@@ -127,7 +133,9 @@
             :--
             (str "-L=error")
             (str "-P=3306")
-            (str "-lease=1")
+            ; use a very large lease to prevent crash when network partition.
+            ; so we must create all schemas before test.
+            (str "-lease=3600")
             (str "-store=hbase")
             (c/lit (str "-path=\"" store-path "\""))
             :> tidb-log
@@ -148,7 +156,7 @@
   [node]
   (c/su
     (info node "starting hbase")
-    (meh (c/exec :mkdir :-p "/tmp/hbase"))))
+    (c/exec :mkdir :-p "/tmp/hbase")
     (meh (c/exec "/root/hbase/bin/start-hbase.sh"))))
 
 (defn stop-hbase!
@@ -157,13 +165,32 @@
   (c/su 
     (info node "stopping hbase")
     ; call stop-hbase.sh is very slow, so here we kill java forcely.
-    (meh (cu/grepkill "java"))
+    (cu/grepkill "java")
+    (Thread/sleep 2000)
     ; (meh (c/exec "/root/hbase/bin/stop-hbase.sh"))
-    (meh (c/exec :rm :-rf "/root/hbase/logs/*"))
-    (meh (c/exec :rm :-rf "/var/lib/hbase/*"))
-    (meh (c/exec :rm :-rf "/tmp/hbase/*"))
+    ;(meh (c/exec :rm :-rf "/var/lib/hbase/"))
+    ;(meh (c/exec :rm :-rf "/root/hbase/logs/"))
+    (meh (c/exec :rm :-rf "/tmp/hbase/"))
     )
   (info node "hbase stopped"))
+
+(defn eval!
+  "Evals a sql string from the command line."
+  [s]
+  (c/exec :echo s | "/root/interpreter" 
+          :-lease 0 
+          :-store "hbase" 
+          (c/lit (str "-dbpath=\"" store-path "\""))
+          :> "/var/log/interpreter.log"))
+
+(defn setup-db!
+  "Initialize TiDB database."
+  [node]
+  (info node "begin to setup tidb database.")
+  (eval! (str "create table if not exists dirty
+              (id     int not null primary key,
+              x       bigint not null);")))
+
 
 (defn db
   "Sets up and tears down TiDB"
@@ -173,15 +200,15 @@
             (install-tidb! node)
             
             (when (= node :n1)
-              ;(install-hbase! node)
+              (install-hbase! node)
               (start-hbase! node)
               (start-tso-server! node)
-              (Thread/sleep 5000))
+              (Thread/sleep 10000)
+              (setup-db! node))
             
             (jepsen/synchronize test)
             (start-tidb-server! node)
             
-            (Thread/sleep 1000)
             (jepsen/synchronize test)
             (info node "set up"))
     
@@ -189,7 +216,7 @@
                (stop-tidb-server! node)
                (when (= node :n1)
                  (stop-tso-server! node)
-                 ; (stop-hbase! node)
+                 (stop-hbase! node)
                  )
                (info node "tore down"))))
 
@@ -267,11 +294,6 @@
   (setup! [this test node]
           (j/with-db-connection 
             [c (conn-spec node)]
-            ; Create table
-            (j/execute! c ["create table if not exists dirty
-                           (id      int not null primary key,
-                           x       bigint not null)"])
-            ; Create rows
             (dotimes [i n]
               (try
                 (with-txn-retries
