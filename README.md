@@ -17,6 +17,13 @@ After you enter docker jepsen, run:
 + `cd /jepsen_tidb`
 + `lein test`
 
+Notice:
+
+If you are in China, the `apt-get` may be very slow because of the poor Chinese network. 
+
+Before you run the `lein test`, run `/jepsen_tidb/docker/update_sources.sh`, 
+this will replace the origin official debian source with [163's](http://mirrors.163.com/.help/debian.html).
+
 ## License
 
 Copyright © 2015 FIXME
