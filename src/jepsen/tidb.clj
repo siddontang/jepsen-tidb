@@ -114,8 +114,8 @@
   [node]
   (info node "stopping tso server")
   (c/su
-    (meh (c/exec :killall :-9 :tso-server))
-    (meh (c/exec :rm :-rf tso-pidfile))))
+    (cu/grepkill :tso-server)
+    (c/exec :rm :-rf tso-pidfile)))
 
 (defn start-tidb-server!
   "Starts tidb server."
@@ -148,8 +148,8 @@
   [node]
   (info node "stopping tidb server")
   (c/su
-    (meh (c/exec :killall :-9 :tidb-server))
-    (meh (c/exec :rm :-rf tidb-pidfile))))
+    (cu/grepkill :tidb-server)
+    (c/exec :rm :-rf tidb-pidfile)))
 
 (defn start-hbase!
   "Starts hbase"
@@ -171,8 +171,8 @@
     (meh (c/exec :rm :-rf (c/lit "/var/lib/hbase/*")))
     (meh (c/exec :rm :-rf (c/lit "/root/hbase/logs/*")))
     (meh (c/exec :rm :-rf (c/lit "/tmp/hbase/*")))
-    )
-  (info node "hbase stopped"))
+    (meh (c/exec :rm :-rf (c/lit "/tmp/Jetty_*")))
+    (info node "hbase stopped")))
 
 (defn eval!
   "Evals a sql string from the command line."
