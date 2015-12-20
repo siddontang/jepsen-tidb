@@ -6,11 +6,17 @@ A Clojure library designed to test [TiDB](https://github.com/pingcap/tidb) with 
 
 Jepsen supports two ways to run, LXC or docker. you can see the jepsen document for more help.
 
-If you use docker, you can simply build the docker, and then run with binding the local host source, like:
+We support origin Jepsen docker in docker mode, and at the same time, we support running multi dockers too. 
 
-+ `cd jepsen_tidb`
-+ `docker build -t jepsen_tidb ./docker/`
-+ `docker run --privileged -t -i -v $(pwd):/jepsen_tidb --name jepsen jepsen_tidb`
+### docker in docker
+
+`./run_dind.sh`
+
+### multi dockers
+
+`./run_multi.sh`
+
+You can use `./stop_multi.sh` to stop all running contains.
 
 After you enter docker jepsen, run:
 
