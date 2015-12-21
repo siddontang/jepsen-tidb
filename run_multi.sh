@@ -1,30 +1,78 @@
 #!/bin/bash
 
-for i in 1 2 3 4 5
-do
-    echo "start jepsen node $i"
-    docker ps -a | grep -qw jepsen_$i || \
-    docker run -d --name jepsen_$i -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
+function start() {
+    for i in 1 2 3 4 5
+    do
+        echo "start jepsen node $i"
+        docker ps -a | grep -qw jepsen_n$i || \
+        docker run -d --name jepsen_n$i -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
 
-    # if jepsen is not running, start it. 
-    docker ps | grep -qw jepsen_$i || docker start jepsen_$i
-done 
+        # if jepsen is not running, start it. 
+        docker ps | grep -qw jepsen_n$i || docker start jepsen_n$i
+    done 
 
-# docker run -d --name jepsen_n1 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
-# docker run -d --name jepsen_n2 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
-# docker run -d --name jepsen_n3 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
-# docker run -d --name jepsen_n4 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
-# docker run -d --name jepsen_n5 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
+    echo "start jepsen control"
 
-echo "start jepsen control"
+    if ! docker ps -a | grep -qw jepsen_control; then
+        docker run -t -i --privileged --name jepsen_control \
+        --link jepsen_n1:n1 --link jepsen_n2:n2 --link jepsen_n3:n3 \
+        --link jepsen_n4:n4 --link jepsen_n5:n5 -v $(pwd):/jepsen_tidb siddontang/jepsen_control
+    else
+        docker ps | grep -qw jepsen_control || docker start jepsen_control
+        docker exec -t -i jepsen_control /bin/bash
+    fi
+}
 
-if ! docker ps -a | grep -qw jepsen_control; then
-    docker run -t -i --privileged --name jepsen_control \
-    --link jepsen_1:n1 --link jepsen_2:n2 --link jepsen_3:n3 \
-    --link jepsen_4:n4 --link jepsen_5:n5 -v $(pwd):/jepsen_tidb siddontang/jepsen_control
-else
-    docker ps | grep -qw jepsen_control || docker start jepsen_control
-    docker exec -t -i jepsen_control /bin/bash
-fi
+function stop() {
+    for i in 1 2 3 4 5
+    do
+        echo "stop jepsen node $i" 
+        docker stop jepsen_n$i
+    done
 
+    echo "stop jepsen control"
+    docker stop jepsen_control
+}
 
+function pull() {
+    echo "pull jepsen node"
+    docker pull siddontang/jepsen_node 
+    echo "pull jepsen control"
+    docker pull siddontang/jepsen_control
+}
+
+function remove() {
+    for i in 1 2 3 4 5
+    do
+        echo "remove jepsen node $i" 
+        docker rm -f jepsen_n$i
+    done
+
+    echo "remove jepsen control"
+    docker rm -f jepsen_control
+}
+
+case $1 in 
+    "start")
+        start
+    ;;
+    "stop") 
+        stop
+    ;;
+    "restart")
+        stop
+        start 
+    ;;
+    "pull") 
+        pull
+    ;;
+    "remove")
+        remove
+    ;;
+    "help")
+        echo "run_multi.sh [start|stop|restart|remove|pull]"
+    ;;
+    *) 
+        start
+    ;;
+esac

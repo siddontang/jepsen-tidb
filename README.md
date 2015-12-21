@@ -10,11 +10,13 @@ We support origin Jepsen docker in docker mode, and at the same time, we support
 
 ### docker in docker
 
-`./run_dind.sh`
+`./run_dind.sh start`
+`./run_dind.sh stop`
 
 ### multi dockers
 
-`./run_multi.sh`
+`./run_multi.sh start`
+`./run_multi.sh stop`
 
 You can use `./stop_multi.sh` to stop all running contains.
 
