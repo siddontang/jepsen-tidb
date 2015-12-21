@@ -17,9 +17,14 @@ done
 # docker run -d --name jepsen_n5 -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
 
 echo "start jepsen control"
-docker ps -a | grep -qw jepsen_control || \
-docker run -t -i --privileged --name jepsen_control \
+
+if ! docker ps -a | grep -qw jepsen_control; then
+    docker run -t -i --privileged --name jepsen_control \
     --link jepsen_1:n1 --link jepsen_2:n2 --link jepsen_3:n3 \
     --link jepsen_4:n4 --link jepsen_5:n5 -v $(pwd):/jepsen_tidb siddontang/jepsen_control
+else
+    docker ps | grep -qw jepsen_control || docker start jepsen_control
+    docker exec -t -i jepsen_control /bin/bash
+fi
 
-docker ps | grep -qw jepsen_control || docker start jepsen_control
+
