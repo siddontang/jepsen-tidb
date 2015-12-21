@@ -180,6 +180,7 @@
   (c/exec :echo s | "/root/interpreter" 
           :-lease 0 
           :-store "hbase" 
+          :-L "debug"
           (c/lit (str "-dbpath=\"" store-path "\""))
           :> "/var/log/interpreter.log"))
 
@@ -189,7 +190,11 @@
   (info node "begin to setup tidb database.")
   (eval! (str "create table if not exists dirty
               (id     int not null primary key,
-              x       bigint not null);")))
+              x       bigint not null);
+              
+              create table if not exists accounts
+              (id      int not null primary key,
+              balance bigint not null);")))
 
 
 (defn db
@@ -288,101 +293,6 @@
                 (j/with-db-transaction [~c (conn-spec ~node)
                                         :isolation :serializable]
                                        ~@body)))))
-
-
-(defrecord DirtyClient [node n]
-  client/Client
-  (setup! [this test node]
-          (j/with-db-connection 
-            [c (conn-spec node)]
-            (dotimes [i n]
-              (try
-                (with-txn-retries
-                  (Thread/sleep (rand-int 10))
-                  (j/insert! c :dirty {:id i, :x -1}))
-                (catch java.sql.SQLException e nil))))
-          
-          (assoc this :node node))
-  
-  (invoke! [this test op]
-           (timeout 5000 (assoc ~op :type :info, :value :timed-out)
-                    (with-error-handling 
-                      op
-                      (with-txn-aborts 
-                        op
-                        (j/with-db-transaction
-                          [c (conn-spec node)
-                           :isolation :serializable]
-                          (try
-                            (case (:f op)
-                              :read (->> (j/query c ["select * from dirty"])
-                                         (mapv :x)
-                                         (assoc op :type :ok, :value))
-                              
-                              :write (let [x (:value op)
-                                           order (shuffle (range n))]
-                                       (doseq [i order]
-                                         (j/query c ["select * from dirty where id = ?" i]))
-                                       (doseq [i order]
-                                         (j/update! c :dirty {:x x} ["id = ?" i]))
-                                       (assoc op :type :ok)))))))))
-  
-  (teardown! [_ test]))
-
-(defn dirty-client
-  [n]
-  (DirtyClient. nil n))
-
-(defn dirty-checker
-  "We're looking for a failed transaction whose value became visible to some
-  read."
-  []
-  (reify checker/Checker
-    (check [this test model history]
-           (let [failed-writes (->> history
-                                    (r/filter op/fail?)
-                                    (r/filter #(= :write (:f %)))
-                                    (r/map :value)
-                                    (into (hash-set)))
-                 reads (->> history
-                            (r/filter op/ok?)
-                            (r/filter #(= :read (:f %)))
-                            (r/map :value))
-                 inconsistent-reads (->> reads
-                                         (r/filter (partial apply not=))
-                                         (into []))
-                 filthy-reads (->> reads
-                                   (r/filter (partial some failed-writes))
-                                   (into []))]
-             {:valid? (empty? filthy-reads)
-              :inconsistent-reads inconsistent-reads
-              :dirty-reads filthy-reads}))))
-
-(def dirty-reads {:type :invoke, :f :read, :value nil})
-
-(def dirty-writes (->> (range)
-                       (map (partial array-map
-                                     :type :invoke,
-                                     :f :write,
-                                     :value))
-                       gen/seq))
-
-(defn dirty-test
-  [version n]
-  (merge tests/noop-test
-         {:name "tidb dirty reads"
-          :os debian/os
-          :db (db version)
-          :concurrency 20
-          :version version
-          :client (dirty-client n)
-          :generator (->> (gen/mix [dirty-reads dirty-writes])
-                          gen/clients
-                          (gen/time-limit 1000))
-          :nemesis nemesis/noop
-          :checker (checker/compose
-                     {:perf (checker/perf)
-                      :dirty-reads (dirty-checker)})}))
 
 
 (defn basic-test
