@@ -3,15 +3,15 @@
 function start() {
     for i in 1 2 3 4 5
     do
-        echo "start jepsen node $i"
+        echo "start jepsen db node $i"
         docker ps -a | grep -qw jepsen_n$i || \
-        docker run -d --name jepsen_n$i -e ROOT_PASS="root" siddontang/jepsen_node /run.sh
+        docker run -d --name jepsen_n$i -e ROOT_PASS="root" siddontang/jepsen_db /run.sh
 
         # if jepsen is not running, start it. 
         docker ps | grep -qw jepsen_n$i || docker start jepsen_n$i
     done 
 
-    echo "start jepsen control"
+    echo "start jepsen control node"
 
     if ! docker ps -a | grep -qw jepsen_control; then
         docker run -t -i --privileged --name jepsen_control \
@@ -26,29 +26,29 @@ function start() {
 function stop() {
     for i in 1 2 3 4 5
     do
-        echo "stop jepsen node $i" 
+        echo "stop jepsen db node $i" 
         docker stop jepsen_n$i
     done
 
-    echo "stop jepsen control"
+    echo "stop jepsen control node"
     docker stop jepsen_control
 }
 
 function pull() {
-    echo "pull jepsen node"
-    docker pull siddontang/jepsen_node 
-    echo "pull jepsen control"
+    echo "pull jepsen db node"
+    docker pull siddontang/jepsen_db
+    echo "pull jepsen control node"
     docker pull siddontang/jepsen_control
 }
 
 function remove() {
     for i in 1 2 3 4 5
     do
-        echo "remove jepsen node $i" 
+        echo "remove jepsen db node $i" 
         docker rm -f jepsen_n$i
     done
 
-    echo "remove jepsen control"
+    echo "remove jepsen control node"
     docker rm -f jepsen_control
 }
 
